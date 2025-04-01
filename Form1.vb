@@ -5,19 +5,60 @@
     Private asteroids As New List(Of Rectangle)
     Private enemies As New List(Of Rectangle)
     Private enemyLasers As New List(Of Rectangle)
+    Private powerUps As New List(Of Rectangle)
+    Private powerUpTypes As New List(Of Integer) ' 0=Shield, 1=DoubleShot, 2=ExtraLife
+    Private ReadOnly powerUpBrushes As SolidBrush() = {
+        New SolidBrush(Color.Blue),     ' Shield
+        New SolidBrush(Color.Yellow),   ' DoubleShot
+        New SolidBrush(Color.OrangeRed)      ' ExtraLife
+    }
+    Private hasPowerUp As Boolean = False
+    Private powerUpTimer As Integer = 0
+    Private powerUpType As Integer = -1
+    Private ReadOnly powerUpSpawnRate As Integer = 700
     Private random As New Random()
+    Private explosions As New List(Of Rectangle)
+    Private explosionTimes As New List(Of Integer)
+    Private ReadOnly explosionMaxTime As Integer = 20
+    Private nearMisses As New List(Of Rectangle)
+    Private nearMissTimers As New List(Of Integer)
+    Private ReadOnly nearMissMaxTime As Integer = 10
 
     ' Game settings
     Private ReadOnly shipSpeed As Integer = 5
     Private ReadOnly bulletSpeed As Integer = 8
-    Private ReadOnly asteroidSpeed As Integer = 3
-    Private ReadOnly enemySpeed As Integer = 2
+    Private asteroidSpeed As Integer = 3
+    Private enemySpeed As Integer = 2
     Private ReadOnly enemyLaserSpeed As Integer = 6
-    Private ReadOnly asteroidSpawnRate As Integer = 50
-    Private ReadOnly enemySpawnRate As Integer = 150
+    Private asteroidSpawnRate As Integer = 50
+    Private enemySpawnRate As Integer = 150
     Private ReadOnly enemyFireRate As Integer = 100
     Private score As Integer = 0
     Private isGameOver As Boolean = False
+    Private lives As Integer = 3
+    Private ReadOnly lifeIconBrush As New SolidBrush(Color.Red)
+    Private playerInvulnerable As Boolean = False
+    Private invulnerabilityTimer As Integer = 0
+
+    ' Power-up constants
+    Private Const POWERUP_DOUBLESHOOT As Integer = 1
+    Private Const POWERUP_SHIELD As Integer = 0
+    Private Const POWERUP_EXTRALIFE As Integer = 2
+
+    ' Power-up rarity settings (percentages)
+    Private Const DOUBLESHOOT_CHANCE As Integer = 60
+    Private Const SHIELD_CHANCE As Integer = 30
+    Private Const EXTRALIFE_CHANCE As Integer = 10  ' This adds up to 100%
+
+    ' Level settings
+    Private level As Integer = 1
+    Private enemiesDefeated As Integer = 0
+    Private enemiesForNextLevel As Integer = 10
+
+    ' Combo settings
+    Private combo As Integer = 0
+    Private comboTimer As Integer = 0
+    Private ReadOnly comboMaxTime As Integer = 120 ' 2 seconds at 60fps
 
     ' Graphics resources
     Private ReadOnly shipBrush As New SolidBrush(Color.White)
@@ -30,7 +71,15 @@
     Private ReadOnly gameOverFont As New Font("Arial", 48, FontStyle.Bold)
 
     ' Game timer
-    Private WithEvents gameTimer As New Timer()
+    Private WithEvents GameTimer As New Timer()
+
+    ' Input state
+    Private leftPressed As Boolean = False
+    Private rightPressed As Boolean = False
+    Private spacePressed As Boolean = False
+    Private fireDelay As Integer = 0
+
+    Private isPaused As Boolean = False
 
     Public Sub New()
         InitializeComponent()
@@ -55,22 +104,83 @@
         asteroids.Clear()
         enemies.Clear()
         enemyLasers.Clear()
+        powerUps.Clear()
+        lives = 3
+        playerInvulnerable = False
+        invulnerabilityTimer = 0
+        hasPowerUp = False
+        powerUpTimer = 0
+        powerUpType = -1
+        level = 1
+        enemiesDefeated = 0
+        enemiesForNextLevel = 10
+        combo = 0
+        comboTimer = 0
 
         ' Initialize ship in the center bottom of the screen
         ship = New Rectangle(Me.ClientSize.Width \ 2 - 20, Me.ClientSize.Height - 50, 40, 40)
 
         ' Set up game timer
-        gameTimer.Interval = 16 ' Approximately 60 FPS
-        gameTimer.Enabled = True
+        GameTimer.Interval = 16 ' Approximately 60 FPS
+        GameTimer.Enabled = True
     End Sub
 
-    Private Sub GameLoop() Handles gameTimer.Tick
-        If Not isGameOver Then
+    Private Sub GameLoop() Handles GameTimer.Tick
+        If Not isGameOver AndAlso Not isPaused Then
+            HandleInput()
             MoveGameObjects()
             CheckCollisions()
             CreateAsteroids()
             ManageEnemies()
+            CreatePowerUps()
+            CheckPowerUpCollisions()
+            ManagePowerUps() ' Keep only one instance of this call
+            HandleInvulnerability()
+            UpdateExplosions()
+            UpdateCombo()
+            UpdateNearMisses()
+            CheckLevelProgression()
             Me.Invalidate() ' Trigger repaint
+        End If
+    End Sub
+
+    Private Sub HandleInput()
+        ' Ship movement
+        If leftPressed AndAlso ship.X > 0 Then
+            ship.X -= shipSpeed
+        End If
+        If rightPressed AndAlso ship.X < Me.ClientSize.Width - ship.Width Then
+            ship.X += shipSpeed
+        End If
+
+        ' Shooting with fire rate limit
+        If spacePressed AndAlso fireDelay <= 0 Then
+            ' Normal shot (centered)
+            bullets.Add(New Rectangle(
+                ship.X + ship.Width \ 2 - 2,
+                ship.Y,
+                4, 10))
+
+            ' Double shot if power-up active (add spread)
+            If hasPowerUp AndAlso powerUpType = POWERUP_DOUBLESHOOT Then
+                ' Add a second bullet (offset to the side)
+                bullets.Add(New Rectangle(
+                    ship.X + ship.Width \ 2 - 8, ' Offset to the left
+                    ship.Y,
+                    4, 10))
+
+                ' Add a third bullet (offset to the other side)
+                bullets.Add(New Rectangle(
+                    ship.X + ship.Width \ 2 + 4, ' Offset to the right
+                    ship.Y,
+                    4, 10))
+            End If
+
+            fireDelay = 10 ' Adjust for desired fire rate
+        End If
+
+        If fireDelay > 0 Then
+            fireDelay -= 1
         End If
     End Sub
 
@@ -134,6 +244,7 @@
             Debug.WriteLine($"Error in MoveGameObjects: {ex.Message}")
         End Try
     End Sub
+
     Private Sub CreateAsteroids()
         Try
             If random.Next(asteroidSpawnRate) = 0 Then
@@ -185,16 +296,57 @@
             4, 15))
     End Sub
 
+    Private Sub CreatePowerUps()
+        If random.Next(powerUpSpawnRate) = 0 Then
+            Dim x As Integer = random.Next(0, Me.ClientSize.Width - 30)
+            powerUps.Add(New Rectangle(x, -30, 30, 30))
+
+            ' Use weighted probability instead of random.Next(3)
+            Dim chance As Integer = random.Next(100) ' Generate number between 0-99
+
+            Dim powerUpType As Integer
+            If chance < DOUBLESHOOT_CHANCE Then
+                powerUpType = POWERUP_DOUBLESHOOT    ' Most common
+            ElseIf chance < DOUBLESHOOT_CHANCE + SHIELD_CHANCE Then
+                powerUpType = POWERUP_SHIELD         ' Less common
+            Else
+                powerUpType = POWERUP_EXTRALIFE      ' Rare
+            End If
+
+            powerUpTypes.Add(powerUpType)
+        End If
+
+        ' Move power-ups
+        For i As Integer = powerUps.Count - 1 To 0 Step -1
+            Dim powerUp = powerUps(i)
+            powerUps(i) = New Rectangle(powerUp.X, powerUp.Y + 2, powerUp.Width, powerUp.Height)
+
+            ' Remove if off-screen
+            If powerUp.Y > Me.ClientSize.Height Then
+                powerUps.RemoveAt(i)
+                powerUpTypes.RemoveAt(i)
+            End If
+        Next
+    End Sub
+
     Private Sub CheckCollisions()
         Try
             ' Check bullet-asteroid collisions
             For i As Integer = bullets.Count - 1 To 0 Step -1
                 For j As Integer = asteroids.Count - 1 To 0 Step -1
                     If i < bullets.Count AndAlso j < asteroids.Count Then
-                        If bullets(i).IntersectsWith(asteroids(j)) Then
+                        ' Use expanded collision area for more forgiving hits
+                        Dim bulletArea = New Rectangle(
+                            bullets(i).X - 2,
+                            bullets(i).Y - 2,
+                            bullets(i).Width + 4,
+                            bullets(i).Height + 4)
+
+                        If bulletArea.IntersectsWith(asteroids(j)) Then
+                            CreateExplosion(asteroids(j).X + asteroids(j).Width \ 2, asteroids(j).Y + asteroids(j).Height \ 2, 40)
                             bullets.RemoveAt(i)
                             asteroids.RemoveAt(j)
-                            score += 100
+                            AddScore(100)
                             Exit For
                         End If
                     End If
@@ -205,27 +357,50 @@
             For i As Integer = bullets.Count - 1 To 0 Step -1
                 For j As Integer = enemies.Count - 1 To 0 Step -1
                     If i < bullets.Count AndAlso j < enemies.Count Then
-                        If bullets(i).IntersectsWith(enemies(j)) Then
+                        ' Use expanded collision area for more forgiving hits
+                        Dim bulletArea = New Rectangle(
+                            bullets(i).X - 2,
+                            bullets(i).Y - 2,
+                            bullets(i).Width + 4,
+                            bullets(i).Height + 4)
+
+                        If bulletArea.IntersectsWith(enemies(j)) Then
+                            CreateExplosion(enemies(j).X + enemies(j).Width \ 2, enemies(j).Y + enemies(j).Height \ 2, 50)
                             bullets.RemoveAt(i)
                             enemies.RemoveAt(j)
-                            score += 300  ' More points for destroying enemies
+                            AddScore(300)  ' More points for destroying enemies
+                            enemiesDefeated += 1
                             Exit For
                         End If
                     End If
                 Next
             Next
 
-            ' Check ship-asteroid collisions
+            ' Check ship-asteroid collisions with more forgiving hitbox
             For Each asteroid In asteroids
-                If ship.IntersectsWith(asteroid) Then
+                ' Create a slightly smaller hitbox for player ship
+                Dim shipHitbox = New Rectangle(
+                    ship.X + 5,  ' Shrink from left
+                    ship.Y + 10, ' Shrink from top
+                    ship.Width - 10, ' Shrink width
+                    ship.Height - 10) ' Shrink height
+
+                If shipHitbox.IntersectsWith(asteroid) AndAlso Not playerInvulnerable Then
                     GameOver()
                     Exit For
                 End If
             Next
 
+            ' Apply the same hitbox changes to enemy and laser collisions
+            Dim playerHitbox = New Rectangle(
+                ship.X + 5,
+                ship.Y + 10,
+                ship.Width - 10,
+                ship.Height - 10)
+
             ' Check ship-enemy collisions
             For Each enemy In enemies
-                If ship.IntersectsWith(enemy) Then
+                If playerHitbox.IntersectsWith(enemy) AndAlso Not playerInvulnerable Then
                     GameOver()
                     Exit For
                 End If
@@ -233,7 +408,7 @@
 
             ' Check ship-enemy laser collisions
             For i As Integer = enemyLasers.Count - 1 To 0 Step -1
-                If enemyLasers(i).IntersectsWith(ship) Then
+                If enemyLasers(i).IntersectsWith(playerHitbox) AndAlso Not playerInvulnerable Then
                     GameOver()
                     Exit For
                 End If
@@ -243,9 +418,160 @@
         End Try
     End Sub
 
+    Private Sub CheckPowerUpCollisions()
+        Try
+            ' Check ship-powerup collisions
+            For i As Integer = powerUps.Count - 1 To 0 Step -1
+                If ship.IntersectsWith(powerUps(i)) Then
+                    ' Apply power-up effect
+                    ApplyPowerUp(powerUpTypes(i))
+
+                    ' Debug line to verify collection
+                    Debug.WriteLine($"Collected power-up type: {powerUpTypes(i)}")
+
+                    ' Remove collected power-up
+                    powerUps.RemoveAt(i)
+                    powerUpTypes.RemoveAt(i)
+                End If
+            Next
+        Catch ex As Exception
+            Debug.WriteLine($"Error in CheckPowerUpCollisions: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Sub ApplyPowerUp(type As Integer)
+        ' Deactivate current power-up if any
+        If hasPowerUp Then
+            ' Reset any power-up specific effects
+            Select Case powerUpType
+                Case POWERUP_SHIELD ' Shield - nothing to reset, just lose shield
+                Case POWERUP_DOUBLESHOOT ' DoubleShot - nothing specific to reset
+                Case POWERUP_EXTRALIFE ' ExtraLife - already applied
+            End Select
+        End If
+
+        ' Apply new power-up
+        hasPowerUp = True
+        powerUpType = type
+        powerUpTimer = 600 ' 10 seconds at 60fps
+
+        ' Power-up specific effects
+        Select Case type
+            Case POWERUP_SHIELD ' Shield
+                playerInvulnerable = True
+
+            Case POWERUP_DOUBLESHOOT ' DoubleShot
+                ' Will be handled in HandleInput shooting logic
+
+            Case POWERUP_EXTRALIFE ' ExtraLife
+                lives += 1
+                hasPowerUp = False ' Immediate effect, no duration
+                powerUpType = -1
+        End Select
+    End Sub
+
+    Private Sub ManagePowerUps()
+        If hasPowerUp AndAlso powerUpType >= 0 Then
+            powerUpTimer -= 1
+
+            ' Power-up expired
+            If powerUpTimer <= 0 Then
+                ' Handle power-up expiration
+                Select Case powerUpType
+                    Case POWERUP_SHIELD ' Shield
+                        playerInvulnerable = False
+                    Case POWERUP_DOUBLESHOOT ' DoubleShot
+                        ' No specific cleanup needed
+                End Select
+
+                ' Reset power-up state
+                hasPowerUp = False
+                powerUpType = -1
+            End If
+        End If
+    End Sub
+
+    Private Sub CheckLevelProgression()
+        If enemiesDefeated >= enemiesForNextLevel Then
+            level += 1
+            enemiesDefeated = 0
+            enemiesForNextLevel += 5 ' Increase enemies needed for next level
+
+            ' Increase difficulty
+            If asteroidSpawnRate > 10 Then asteroidSpawnRate -= 5
+            If enemySpawnRate > 30 Then enemySpawnRate -= 10
+        End If
+    End Sub
+
     Private Sub GameOver()
-        isGameOver = True
-        gameTimer.Enabled = False
+        lives -= 1
+        If lives <= 0 Then
+            isGameOver = True
+            GameTimer.Enabled = False
+        Else
+            ' Reset player position but continue game
+            ship = New Rectangle(Me.ClientSize.Width \ 2 - 20, Me.ClientSize.Height - 50, 40, 40)
+            ' Add brief invulnerability time
+            playerInvulnerable = True
+            invulnerabilityTimer = 120 ' 2 seconds at 60fps
+        End If
+    End Sub
+
+    Private Sub HandleInvulnerability()
+        If playerInvulnerable Then
+            invulnerabilityTimer -= 1
+            If invulnerabilityTimer <= 0 Then
+                playerInvulnerable = False
+            End If
+        End If
+    End Sub
+
+    Private Sub CreateExplosion(x As Integer, y As Integer, size As Integer)
+        explosions.Add(New Rectangle(x - size \ 2, y - size \ 2, size, size))
+        explosionTimes.Add(explosionMaxTime)
+    End Sub
+
+    Private Sub UpdateExplosions()
+        For i As Integer = explosionTimes.Count - 1 To 0 Step -1
+            explosionTimes(i) -= 1
+            If explosionTimes(i) <= 0 Then
+                explosions.RemoveAt(i)
+                explosionTimes.RemoveAt(i)
+            End If
+        Next
+    End Sub
+
+    Private Sub CreateNearMiss(x As Integer, y As Integer)
+        nearMisses.Add(New Rectangle(x - 5, y - 5, 10, 10))
+        nearMissTimers.Add(nearMissMaxTime)
+    End Sub
+
+    Private Sub UpdateNearMisses()
+        For i As Integer = nearMissTimers.Count - 1 To 0 Step -1
+            nearMissTimers(i) -= 1
+            If nearMissTimers(i) <= 0 Then
+                nearMisses.RemoveAt(i)
+                nearMissTimers.RemoveAt(i)
+            End If
+        Next
+    End Sub
+
+    Private Sub AddScore(basePoints As Integer)
+        combo += 1
+        comboTimer = comboMaxTime
+
+        ' Calculate score with multiplier
+        Dim multiplier As Double = 1.0 + (combo - 1) * 0.1 ' 10% increase per combo
+        score += CInt(basePoints * multiplier)
+    End Sub
+
+    Private Sub UpdateCombo()
+        If combo > 0 Then
+            comboTimer -= 1
+            If comboTimer <= 0 Then
+                combo = 0
+            End If
+        End If
     End Sub
 
     Protected Overrides Sub OnPaint(e As PaintEventArgs)
@@ -257,7 +583,7 @@
 
             ' Draw game objects
             If Not isGameOver Then
-                ' Draw ship
+                ' Draw ship (replace existing ship drawing code)
                 Dim points() As Point = {
                     New Point(ship.X + ship.Width \ 2, ship.Y),
                     New Point(ship.X, ship.Y + ship.Height),
@@ -265,14 +591,35 @@
                 }
                 e.Graphics.FillPolygon(shipBrush, points)
 
+                ' Draw shield if active
+                If hasPowerUp AndAlso powerUpType = POWERUP_SHIELD Then
+                    Dim shieldRect As New Rectangle(
+                        ship.X - 5, ship.Y - 5,
+                        ship.Width + 10, ship.Height + 10)
+                    e.Graphics.DrawEllipse(New Pen(Color.Blue, 2), shieldRect)
+                End If
+
                 ' Draw bullets
                 For Each bullet In bullets
                     e.Graphics.FillEllipse(bulletBrush, bullet)
                 Next
 
-                ' Draw asteroids
+                ' Draw asteroids (update this in the OnPaint method)
                 For Each asteroid In asteroids
+                    ' Draw outer asteroid shape
                     e.Graphics.FillEllipse(asteroidBrush, asteroid)
+
+                    ' Draw a slightly darker crater for visual detail
+                    Dim craterSize As Integer = asteroid.Width \ 2
+                    Dim craterX As Integer = asteroid.X + random.Next(asteroid.Width - craterSize)
+                    Dim craterY As Integer = asteroid.Y + random.Next(asteroid.Height - craterSize)
+                    e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(30, 30, 30)), craterX, craterY, craterSize, craterSize)
+
+                    ' Draw a lighter highlight for 3D effect
+                    Dim highlightSize As Integer = asteroid.Width \ 3
+                    Dim highlightX As Integer = asteroid.X + random.Next(asteroid.Width - highlightSize)
+                    Dim highlightY As Integer = asteroid.Y + random.Next(asteroid.Height - highlightSize)
+                    e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(80, 80, 80)), highlightX, highlightY, highlightSize, highlightSize)
                 Next
 
                 ' Draw enemies (triangle shape pointing at player)
@@ -312,14 +659,64 @@
                 For Each laser In enemyLasers
                     e.Graphics.FillRectangle(enemyLaserBrush, laser)
                 Next
+
+                ' Draw power-ups (add after drawing enemy lasers)
+                For i As Integer = 0 To powerUps.Count - 1
+                    ' Select brush based on power-up type
+                    If i < powerUpTypes.Count Then
+                        Dim type As Integer = powerUpTypes(i)
+                        If type >= 0 AndAlso type < powerUpBrushes.Length Then
+                            e.Graphics.FillEllipse(powerUpBrushes(type), powerUps(i))
+                        End If
+                    End If
+                Next
+
+                ' Draw explosions
+                For Each explosion In explosions
+                    e.Graphics.FillEllipse(New SolidBrush(Color.Orange), explosion)
+                Next
+
+                ' Draw near misses
+                For Each nearMiss In nearMisses
+                    e.Graphics.FillEllipse(New SolidBrush(Color.Green), nearMiss)
+                Next
+
+                ' Draw near misses (visual feedback)
+                For Each nearMiss In nearMisses
+                    e.Graphics.DrawEllipse(New Pen(Color.White, 1), nearMiss)
+                Next
             End If
 
             ' Draw score
             e.Graphics.DrawString($"Score: {score}", scoreFont, scoreBrush, 20, 20)
 
+            ' Draw level
+            e.Graphics.DrawString($"Level: {level}", scoreFont, scoreBrush, 20, 50)
+
+            ' Draw lives
+            For i As Integer = 1 To lives
+                e.Graphics.FillEllipse(lifeIconBrush, 20 + (i * 30), 80, 20, 20)
+            Next
+
+            ' Draw active power-up indicator (add after drawing lives)
+            If hasPowerUp AndAlso powerUpType >= 0 AndAlso powerUpType < powerUpBrushes.Length Then
+                ' Draw power-up icon
+                e.Graphics.FillEllipse(powerUpBrushes(powerUpType), 20, 110, 20, 20)
+
+                ' Draw power-up timer bar
+                Dim barWidth As Integer = 100
+                Dim barHeight As Integer = 10
+                Dim remainingWidth As Integer = CInt(barWidth * (powerUpTimer / 600.0))
+
+                ' Background bar
+                e.Graphics.FillRectangle(New SolidBrush(Color.DarkGray), 50, 115, barWidth, barHeight)
+                ' Remaining time bar
+                e.Graphics.FillRectangle(powerUpBrushes(powerUpType), 50, 115, remainingWidth, barHeight)
+            End If
+
             ' Draw game over message
             If isGameOver Then
-                Dim gameOverText As String = "GAME OVER!"
+                Dim gameOverText As String = "GAME OVER"
                 Dim textSize = e.Graphics.MeasureString(gameOverText, gameOverFont)
                 Dim x As Single = (Me.ClientSize.Width - textSize.Width) / 2
                 Dim y As Single = (Me.ClientSize.Height - textSize.Height) / 2
@@ -331,6 +728,15 @@
                 x = (Me.ClientSize.Width - instructionSize.Width) / 2
                 y += textSize.Height + 20
                 e.Graphics.DrawString(instructionText, scoreFont, scoreBrush, x, y)
+            End If
+
+            ' Draw pause state
+            If isPaused Then
+                Dim pauseText As String = "PAUSED"
+                Dim textSize = e.Graphics.MeasureString(pauseText, gameOverFont)
+                Dim x As Single = (Me.ClientSize.Width - textSize.Width) / 2
+                Dim y As Single = (Me.ClientSize.Height - textSize.Height) / 2
+                e.Graphics.DrawString(pauseText, gameOverFont, scoreBrush, x, y)
             End If
         Catch ex As Exception
             Debug.WriteLine($"Error in OnPaint: {ex.Message}")
@@ -346,30 +752,47 @@
                     Case Keys.R
                         InitializeGame()
                     Case Keys.Q
-                        Me.Close()  ' This will trigger the OnClosing event and clean up resources
+                        Me.Close()
                 End Select
                 Return
             End If
 
-            ' Ship movement
+            ' Track key states
             Select Case e.KeyCode
                 Case Keys.Left
-                    If ship.X > 0 Then
-                        ship.X -= shipSpeed
-                    End If
+                    leftPressed = True
                 Case Keys.Right
-                    If ship.X < Me.ClientSize.Width - ship.Width Then
-                        ship.X += shipSpeed
-                    End If
+                    rightPressed = True
                 Case Keys.Space
-                    ' Shoot bullet
-                    bullets.Add(New Rectangle(
-                        ship.X + ship.Width \ 2 - 2,
-                        ship.Y,
-                        4, 10))
+                    spacePressed = True
+                Case Keys.P, Keys.Escape
+                    isPaused = Not isPaused
+                    If isPaused Then
+                        GameTimer.Enabled = False
+                    Else
+                        GameTimer.Enabled = True
+                    End If
             End Select
         Catch ex As Exception
             Debug.WriteLine($"Error in OnKeyDown: {ex.Message}")
+        End Try
+    End Sub
+
+    Protected Overrides Sub OnKeyUp(e As KeyEventArgs)
+        Try
+            MyBase.OnKeyUp(e)
+
+            ' Release key states
+            Select Case e.KeyCode
+                Case Keys.Left
+                    leftPressed = False
+                Case Keys.Right
+                    rightPressed = False
+                Case Keys.Space
+                    spacePressed = False
+            End Select
+        Catch ex As Exception
+            Debug.WriteLine($"Error in OnKeyUp: {ex.Message}")
         End Try
     End Sub
 
@@ -385,7 +808,7 @@
             scoreBrush.Dispose()
             scoreFont.Dispose()
             gameOverFont.Dispose()
-            gameTimer.Dispose()
+            GameTimer.Dispose()
         Catch ex As Exception
             Debug.WriteLine($"Error in OnClosing: {ex.Message}")
         End Try
