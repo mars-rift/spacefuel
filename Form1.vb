@@ -3,6 +3,7 @@
     Private ship As Rectangle
     Private bullets As New List(Of Rectangle)
     Private asteroids As New List(Of Rectangle)
+    Private asteroidDetails As New List(Of Point()) ' Store crater and highlight positions
     Private enemies As New List(Of Rectangle)
     Private enemyLasers As New List(Of Rectangle)
     Private powerUps As New List(Of Rectangle)
@@ -33,11 +34,11 @@
     Private ReadOnly shipSpeed As Integer = 5
     Private ReadOnly bulletSpeed As Integer = 8
     Private asteroidSpeed As Integer = 3
-    Private enemySpeed As Integer = 2
-    Private ReadOnly enemyLaserSpeed As Integer = 6
+    Private enemySpeed As Integer = 4 ' Increased from 2 to 4
+    Private ReadOnly enemyLaserSpeed As Integer = 8 ' Increased from 6 to 8
     Private asteroidSpawnRate As Integer = 50
     Private enemySpawnRate As Integer = 150
-    Private ReadOnly enemyFireRate As Integer = 100
+    Private ReadOnly enemyFireRate As Integer = 60 ' Reduced from 100 to 60 (fires more often)
     Private score As Integer = 0
     Private isGameOver As Boolean = False
     Private lives As Integer = 3
@@ -102,12 +103,17 @@
         Me.ClientSize = New Size(800, 600)
         Me.StartPosition = FormStartPosition.CenterScreen
         Me.KeyPreview = True
+        
+        ' Performance optimizations
+        Me.SetStyle(ControlStyles.AllPaintingInWmPaint Or ControlStyles.UserPaint Or ControlStyles.DoubleBuffer, True)
+        Me.UpdateStyles()
 
         ' Reset game state
         score = 0
         isGameOver = False
         bullets.Clear()
         asteroids.Clear()
+        asteroidDetails.Clear()
         enemies.Clear()
         enemyLasers.Clear()
         powerUps.Clear()
@@ -133,6 +139,12 @@
         spacePressed = False
         fireDelay = 0
         isPaused = False
+
+        ' Reset difficulty settings
+        asteroidSpeed = 3
+        enemySpeed = 4
+        asteroidSpawnRate = 50
+        enemySpawnRate = 150
 
         ' Initialize ship in the center bottom of the screen
         ship = New Rectangle(Me.ClientSize.Width \ 2 - 20, Me.ClientSize.Height - 50, 40, 40)
@@ -162,7 +174,8 @@
             
             ' Reset star to top if it goes off screen
             If star.Y > Me.ClientSize.Height Then
-                star = New Point(random.Next(Me.ClientSize.Width), -5)
+                star.Y = -5
+                star.X = random.Next(Me.ClientSize.Width)
             End If
             
             stars(i) = star
@@ -250,6 +263,7 @@
                 ' Remove asteroids that are off screen
                 If asteroid.Y > Me.ClientSize.Height Then
                     asteroids.RemoveAt(i)
+                    asteroidDetails.RemoveAt(i) ' Remove corresponding details
                 End If
             Next
 
@@ -257,17 +271,32 @@
             For i As Integer = enemies.Count - 1 To 0 Step -1
                 Dim enemy = enemies(i)
 
-                ' Move horizontally with simple AI to follow player
-                If enemy.X + (enemy.Width \ 2) < ship.X + (ship.Width \ 2) Then
+                ' Improved AI movement - more aggressive pursuit
+                Dim playerCenterX As Integer = ship.X + ship.Width \ 2
+                Dim enemyCenterX As Integer = enemy.X + enemy.Width \ 2
+                Dim distance As Integer = Math.Abs(playerCenterX - enemyCenterX)
+
+                ' Move horizontally with enhanced AI
+                If enemyCenterX < playerCenterX Then
                     enemy.X += enemySpeed
-                ElseIf enemy.X + (enemy.Width \ 2) > ship.X + (ship.Width \ 2) Then
+                ElseIf enemyCenterX > playerCenterX Then
                     enemy.X -= enemySpeed
                 End If
 
-                ' Move down slowly
-                If random.Next(30) = 0 Then
-                    enemy.Y += 5
+                ' More aggressive downward movement
+                If random.Next(20) = 0 Then ' Increased from 30 to 20 for more frequent movement
+                    enemy.Y += 8 ' Increased from 5 to 8
                 End If
+
+                ' Additional side-to-side movement for evasion
+                If random.Next(40) = 0 Then
+                    enemy.X += If(random.Next(2) = 0, -15, 15)
+                    ' Keep enemy within screen bounds
+                    If enemy.X < 0 Then enemy.X = 0
+                    If enemy.X > Me.ClientSize.Width - enemy.Width Then enemy.X = Me.ClientSize.Width - enemy.Width
+                End If
+
+                enemies(i) = enemy
 
                 ' Remove enemies that are off screen
                 If enemy.Y > Me.ClientSize.Height Then
@@ -295,6 +324,13 @@
             If random.Next(asteroidSpawnRate) = 0 Then
                 Dim x As Integer = random.Next(0, Me.ClientSize.Width - 40)
                 asteroids.Add(New Rectangle(x, -50, 40, 40))
+                
+                ' Pre-calculate visual details for consistent rendering
+                Dim details(2) As Point
+                details(0) = New Point(random.Next(20), random.Next(20)) ' Crater offset
+                details(1) = New Point(random.Next(15), random.Next(15)) ' Highlight offset
+                details(2) = New Point(random.Next(10, 20), random.Next(5, 15)) ' Sizes
+                asteroidDetails.Add(details)
             End If
         Catch ex As Exception
             Debug.WriteLine($"Error in CreateAsteroids: {ex.Message}")
@@ -303,16 +339,24 @@
 
     Private Sub ManageEnemies()
         Try
-            ' Spawn new enemies
-            If random.Next(enemySpawnRate) = 0 AndAlso enemies.Count < 3 Then
+            ' Spawn new enemies - increased max count and improved spawn rate
+            If random.Next(enemySpawnRate) = 0 AndAlso enemies.Count < 5 Then ' Increased from 3 to 5
                 Dim x As Integer = random.Next(50, Me.ClientSize.Width - 90)
-                enemies.Add(New Rectangle(x, 50, 50, 50))
+                enemies.Add(New Rectangle(x, 50, 60, 60)) ' Increased size from 50x50 to 60x60
             End If
 
-            ' Enemy firing logic
+            ' Enemy firing logic - more aggressive firing patterns
             For Each enemy In enemies
+                ' Predictive firing - aim where player will be
                 If random.Next(enemyFireRate) = 0 Then
-                    FireEnemyLaser(enemy)
+                    FirePredictiveLaser(enemy)
+                End If
+                
+                ' Occasional burst fire
+                If random.Next(200) = 0 Then
+                    For burst As Integer = 0 To 2
+                        FireEnemyLaser(enemy)
+                    Next
                 End If
             Next
         Catch ex As Exception
@@ -339,6 +383,36 @@
             enemyCenterX + directionX - 2,
             enemyCenterY + directionY,
             4, 15))
+    End Sub
+
+    Private Sub FirePredictiveLaser(enemy As Rectangle)
+        ' Predictive firing - aim where player will be based on movement
+        Dim enemyCenterX As Integer = enemy.X + enemy.Width \ 2
+        Dim enemyCenterY As Integer = enemy.Y + enemy.Height \ 2
+        
+        ' Predict player movement
+        Dim predictedPlayerX As Integer = ship.X + ship.Width \ 2
+        If leftPressed Then
+            predictedPlayerX -= shipSpeed * 10 ' Predict 10 frames ahead
+        ElseIf rightPressed Then
+            predictedPlayerX += shipSpeed * 10
+        End If
+        
+        Dim directionX As Integer = predictedPlayerX - enemyCenterX
+        Dim directionY As Integer = (ship.Y + ship.Height \ 2) - enemyCenterY
+
+        ' Normalize and scale direction
+        Dim length As Double = Math.Sqrt(directionX * directionX + directionY * directionY)
+        If length > 0 Then
+            directionX = CInt(directionX / length * enemy.Width / 2)
+            directionY = CInt(directionY / length * enemy.Height / 2)
+        End If
+
+        ' Create a predictive laser
+        enemyLasers.Add(New Rectangle(
+            enemyCenterX + directionX - 2,
+            enemyCenterY + directionY,
+            5, 18)) ' Slightly larger and longer laser
     End Sub
 
     Private Sub CreatePowerUps()
@@ -391,8 +465,9 @@
                             CreateExplosion(asteroids(j).X + asteroids(j).Width \ 2, asteroids(j).Y + asteroids(j).Height \ 2, 40)
                             bullets.RemoveAt(i)
                             asteroids.RemoveAt(j)
+                            asteroidDetails.RemoveAt(j) ' Remove corresponding details
                             AddScore(100)
-                            Console.Beep(800, 100) ' Sound effect for asteroid destruction
+                            ' Console.Beep(800, 100) ' Removed for better performance
                             Exit For
                         End If
                     End If
@@ -416,7 +491,7 @@
                             enemies.RemoveAt(j)
                             AddScore(300)  ' More points for destroying enemies
                             enemiesDefeated += 1
-                            Console.Beep(600, 150) ' Sound effect for enemy destruction
+                            ' Console.Beep(600, 150) ' Removed for better performance
                             Exit For
                         End If
                     End If
@@ -432,7 +507,7 @@
                     ship.Width - 10, ' Shrink width
                     ship.Height - 10) ' Shrink height
 
-                If shipHitbox.IntersectsWith(asteroid) AndAlso Not playerInvulnerable AndAlso Not shieldActive Then
+                If shipHitbox.IntersectsWith(asteroid) AndAlso Not playerInvulnerable AndAlso Not (shieldActive AndAlso hasPowerUp AndAlso powerUpType = POWERUP_SHIELD) Then
                     GameOver()
                     Exit For
                 End If
@@ -447,7 +522,7 @@
 
             ' Check ship-enemy collisions
             For Each enemy In enemies
-                If playerHitbox.IntersectsWith(enemy) AndAlso Not playerInvulnerable AndAlso Not shieldActive Then
+                If playerHitbox.IntersectsWith(enemy) AndAlso Not playerInvulnerable AndAlso Not (shieldActive AndAlso hasPowerUp AndAlso powerUpType = POWERUP_SHIELD) Then
                     GameOver()
                     Exit For
                 End If
@@ -455,7 +530,11 @@
 
             ' Check ship-enemy laser collisions
             For i As Integer = enemyLasers.Count - 1 To 0 Step -1
-                If enemyLasers(i).IntersectsWith(playerHitbox) AndAlso Not playerInvulnerable AndAlso Not shieldActive Then
+                If i < enemyLasers.Count AndAlso enemyLasers(i).IntersectsWith(playerHitbox) AndAlso Not (shieldActive AndAlso hasPowerUp AndAlso powerUpType = POWERUP_SHIELD) Then
+                    ' Create small explosion at hit point for visual feedback
+                    CreateExplosion(ship.X + ship.Width \ 2, ship.Y + ship.Height \ 2, 30)
+                    ' Remove the laser that hit the player
+                    enemyLasers.RemoveAt(i)
                     GameOver()
                     Exit For
                 End If
@@ -475,7 +554,7 @@
 
                     ' Debug line to verify collection
                     Debug.WriteLine($"Collected power-up type: {powerUpTypes(i)}")
-                    Console.Beep(1000, 200) ' Sound effect for power-up collection
+                    ' Console.Beep(1000, 200) ' Removed for better performance
 
                     ' Remove collected power-up
                     powerUps.RemoveAt(i)
@@ -492,7 +571,8 @@
         If hasPowerUp Then
             ' Reset any power-up specific effects
             Select Case powerUpType
-                Case POWERUP_SHIELD ' Shield - nothing to reset, just lose shield
+                Case POWERUP_SHIELD ' Shield - deactivate shield
+                    shieldActive = False
                 Case POWERUP_DOUBLESHOOT ' DoubleShot - nothing specific to reset
                 Case POWERUP_EXTRALIFE ' ExtraLife - already applied
             End Select
@@ -515,6 +595,7 @@
                 lives += 1
                 hasPowerUp = False ' Immediate effect, no duration
                 powerUpType = -1
+                shieldActive = False ' Make sure shield is off for ExtraLife
         End Select
     End Sub
 
@@ -545,9 +626,13 @@
             enemiesDefeated = 0
             enemiesForNextLevel += 5 ' Increase enemies needed for next level
 
-            ' Increase difficulty
+            ' Increase difficulty more aggressively
             If asteroidSpawnRate > 10 Then asteroidSpawnRate -= 5
-            If enemySpawnRate > 30 Then enemySpawnRate -= 10
+            If enemySpawnRate > 20 Then enemySpawnRate -= 15 ' Faster enemy spawns
+            If enemySpeed < 8 Then enemySpeed += 1 ' Enemies get faster each level
+            
+            ' Show level up notification
+            Debug.WriteLine($"Level {level}! Enemy speed: {enemySpeed}, Enemy spawn rate: {enemySpawnRate}")
         End If
     End Sub
 
@@ -629,25 +714,30 @@
             ' Draw using anti-aliasing
             e.Graphics.SmoothingMode = Drawing2D.SmoothingMode.AntiAlias
 
-            ' Draw star field background
+            ' Draw star field background (optimized)
             For i As Integer = 0 To stars.Count - 1
                 Dim brightness As Integer = 100 + (starSpeeds(i) * 50) ' Faster stars are brighter
+                Dim starSize As Integer = If(starSpeeds(i) > 2, 2, 1) ' Faster stars are bigger
                 Dim starColor As Color = Color.FromArgb(brightness, brightness, brightness)
-                e.Graphics.FillRectangle(New SolidBrush(starColor), stars(i).X, stars(i).Y, 1, 1)
+                e.Graphics.FillRectangle(New SolidBrush(starColor), stars(i).X, stars(i).Y, starSize, starSize)
             Next
 
             ' Draw game objects
             If Not isGameOver Then
-                ' Draw ship (replace existing ship drawing code)
+                ' Draw ship (with invulnerability flashing effect)
                 Dim points() As Point = {
                     New Point(ship.X + ship.Width \ 2, ship.Y),
                     New Point(ship.X, ship.Y + ship.Height),
                     New Point(ship.X + ship.Width, ship.Y + ship.Height)
                 }
-                e.Graphics.FillPolygon(shipBrush, points)
+                
+                ' Flash ship during invulnerability (but always draw if not invulnerable)
+                If Not playerInvulnerable OrElse (invulnerabilityTimer Mod 8) < 4 Then
+                    e.Graphics.FillPolygon(shipBrush, points)
+                End If
 
                 ' Draw shield if active
-                If shieldActive Then
+                If shieldActive AndAlso hasPowerUp AndAlso powerUpType = POWERUP_SHIELD Then
                     Dim shieldRect As New Rectangle(
                         ship.X - 5, ship.Y - 5,
                         ship.Width + 10, ship.Height + 10)
@@ -659,22 +749,27 @@
                     e.Graphics.FillEllipse(bulletBrush, bullet)
                 Next
 
-                ' Draw asteroids (update this in the OnPaint method)
-                For Each asteroid In asteroids
-                    ' Draw outer asteroid shape
-                    e.Graphics.FillEllipse(asteroidBrush, asteroid)
+                ' Draw asteroids with pre-calculated details
+                For i As Integer = 0 To asteroids.Count - 1
+                    If i < asteroidDetails.Count Then
+                        Dim asteroid As Rectangle = asteroids(i)
+                        Dim details As Point() = asteroidDetails(i)
+                        
+                        ' Draw outer asteroid shape
+                        e.Graphics.FillEllipse(asteroidBrush, asteroid)
 
-                    ' Draw a slightly darker crater for visual detail
-                    Dim craterSize As Integer = asteroid.Width \ 2
-                    Dim craterX As Integer = asteroid.X + random.Next(asteroid.Width - craterSize)
-                    Dim craterY As Integer = asteroid.Y + random.Next(asteroid.Height - craterSize)
-                    e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(30, 30, 30)), craterX, craterY, craterSize, craterSize)
+                        ' Draw crater using pre-calculated position
+                        Dim craterSize As Integer = details(2).X ' Use pre-calculated size
+                        Dim craterX As Integer = asteroid.X + details(0).X
+                        Dim craterY As Integer = asteroid.Y + details(0).Y
+                        e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(30, 30, 30)), craterX, craterY, craterSize, craterSize)
 
-                    ' Draw a lighter highlight for 3D effect
-                    Dim highlightSize As Integer = asteroid.Width \ 3
-                    Dim highlightX As Integer = asteroid.X + random.Next(asteroid.Width - highlightSize)
-                    Dim highlightY As Integer = asteroid.Y + random.Next(asteroid.Height - highlightSize)
-                    e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(80, 80, 80)), highlightX, highlightY, highlightSize, highlightSize)
+                        ' Draw highlight using pre-calculated position
+                        Dim highlightSize As Integer = details(2).Y ' Use pre-calculated size
+                        Dim highlightX As Integer = asteroid.X + details(1).X
+                        Dim highlightY As Integer = asteroid.Y + details(1).Y
+                        e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(80, 80, 80)), highlightX, highlightY, highlightSize, highlightSize)
+                    End If
                 Next
 
                 ' Draw enemies (triangle shape pointing at player)
@@ -687,32 +782,52 @@
                     Dim directionX As Integer = (ship.X + ship.Width \ 2) - enemyCenterX
                     Dim directionY As Integer = (ship.Y + ship.Height \ 2) - enemyCenterY
 
-                    ' Normalize and scale direction
+                    ' Normalize and scale direction for larger, more visible enemies
                     Dim length As Double = Math.Sqrt(directionX * directionX + directionY * directionY)
                     If length > 0 Then
-                        directionX = CInt(directionX / length * enemy.Width / 2)
-                        directionY = CInt(directionY / length * enemy.Height / 2)
+                        directionX = CInt(directionX / length * 25) ' Increased from 20 to 25
+                        directionY = CInt(directionY / length * 25)
+                    Else
+                        ' Default downward pointing if no direction can be calculated
+                        directionX = 0
+                        directionY = 25 ' Increased from 20 to 25
                     End If
 
-                    ' Create triangle points (point at player)
-
-                    ' Draw enemy triangle
+                    ' Create larger triangle points with improved wing geometry
+                    Dim frontX As Integer = enemyCenterX + directionX
+                    Dim frontY As Integer = enemyCenterY + directionY
+                    
+                    ' Calculate perpendicular vector for larger wings
+                    Dim perpX As Integer = -directionY
+                    Dim perpY As Integer = directionX
+                    
+                    ' Draw enemy triangle with larger, more visible geometry
                     e.Graphics.FillPolygon(enemyBrush, {
-                        New Point(enemyCenterX + directionX, enemyCenterY + directionY),                   ' Front point (toward player)
-                        New Point(enemyCenterX - directionY - directionX \ 2, enemyCenterY + directionX - directionY \ 2), ' Wing 1
-                        New Point(enemyCenterX + directionY - directionX \ 2, enemyCenterY - directionX - directionY \ 2)  ' Wing 2
+                        New Point(frontX, frontY),                                          ' Front point (toward player)
+                        New Point(enemyCenterX - perpX * 3 \ 4, enemyCenterY - perpY * 3 \ 4), ' Left wing (larger)
+                        New Point(enemyCenterX + perpX * 3 \ 4, enemyCenterY + perpY * 3 \ 4)  ' Right wing (larger)
                     })
 
-                    ' Draw cockpit (circle within triangle)
-                    Dim cockpitSize As Integer = enemy.Width \ 3
+                    ' Draw cockpit (larger circle within triangle)
+                    Dim cockpitSize As Integer = enemy.Width \ 3 ' Increased back to 1/3 for visibility
                     Dim cockpitX As Integer = enemyCenterX - cockpitSize \ 2
                     Dim cockpitY As Integer = enemyCenterY - cockpitSize \ 2
                     e.Graphics.FillEllipse(New SolidBrush(Color.DarkSlateGray), cockpitX, cockpitY, cockpitSize, cockpitSize)
+                    
+                    ' Add engine glow effect for better visibility
+                    Dim engineSize As Integer = 8
+                    Dim engineX As Integer = enemyCenterX - directionX \ 2 - engineSize \ 2
+                    Dim engineY As Integer = enemyCenterY - directionY \ 2 - engineSize \ 2
+                    e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(150, Color.Red)), engineX, engineY, engineSize, engineSize)
                 Next
 
-                ' Draw enemy lasers
+                ' Draw enemy lasers with enhanced visuals
                 For Each laser In enemyLasers
+                    ' Draw main laser beam
                     e.Graphics.FillRectangle(enemyLaserBrush, laser)
+                    ' Add glow effect
+                    Dim glowRect As New Rectangle(laser.X - 1, laser.Y - 1, laser.Width + 2, laser.Height + 2)
+                    e.Graphics.FillRectangle(New SolidBrush(Color.FromArgb(100, Color.LimeGreen)), glowRect)
                 Next
 
                 ' Draw power-ups (add after drawing enemy lasers)
@@ -769,23 +884,30 @@
             ' Draw combo (if active)
             If combo > 1 Then
                 e.Graphics.DrawString($"Combo: x{combo}", scoreFont, New SolidBrush(Color.Yellow), 20, 80)
-                ' Draw combo timer bar
+                ' Draw combo timer bar below the text
                 Dim comboBarWidth As Integer = 100
-                Dim comboBarHeight As Integer = 5
+                Dim comboBarHeight As Integer = 8
                 Dim comboProgress As Single = comboTimer / comboMaxTime
-                e.Graphics.FillRectangle(New SolidBrush(Color.DarkGray), 140, 90, comboBarWidth, comboBarHeight)
-                e.Graphics.FillRectangle(New SolidBrush(Color.Yellow), 140, 90, CInt(comboBarWidth * comboProgress), comboBarHeight)
+                Dim barY As Integer = 105 ' Position below the combo text
+                
+                ' Background bar
+                e.Graphics.FillRectangle(New SolidBrush(Color.DarkGray), 20, barY, comboBarWidth, comboBarHeight)
+                ' Remaining time bar
+                e.Graphics.FillRectangle(New SolidBrush(Color.Yellow), 20, barY, CInt(comboBarWidth * comboProgress), comboBarHeight)
+                
+                ' Add a border around the bar
+                e.Graphics.DrawRectangle(New Pen(Color.White, 1), 20, barY, comboBarWidth, comboBarHeight)
             End If
 
             ' Draw lives
             For i As Integer = 1 To lives
-                e.Graphics.FillEllipse(lifeIconBrush, 20 + (i * 30), If(combo > 1, 110, 80), 20, 20)
+                e.Graphics.FillEllipse(lifeIconBrush, 20 + (i * 30), If(combo > 1, 120, 80), 20, 20)
             Next
 
             ' Draw active power-up indicator (add after drawing lives)
             If hasPowerUp AndAlso powerUpType >= 0 AndAlso powerUpType < powerUpBrushes.Length Then
                 ' Draw power-up icon
-                Dim powerUpY As Integer = If(combo > 1, 140, 110)
+                Dim powerUpY As Integer = If(combo > 1, 150, 110)
                 e.Graphics.FillEllipse(powerUpBrushes(powerUpType), 20, powerUpY, 20, 20)
 
                 ' Draw power-up timer bar
