@@ -24,6 +24,11 @@
     Private nearMissTimers As New List(Of Integer)
     Private ReadOnly nearMissMaxTime As Integer = 10
 
+    ' Star field for background
+    Private stars As New List(Of Point)
+    Private starSpeeds As New List(Of Integer)
+    Private ReadOnly maxStars As Integer = 100
+
     ' Game settings
     Private ReadOnly shipSpeed As Integer = 5
     Private ReadOnly bulletSpeed As Integer = 8
@@ -39,6 +44,7 @@
     Private ReadOnly lifeIconBrush As New SolidBrush(Color.Red)
     Private playerInvulnerable As Boolean = False
     Private invulnerabilityTimer As Integer = 0
+    Private shieldActive As Boolean = False
 
     ' Power-up constants
     Private Const POWERUP_DOUBLESHOOT As Integer = 1
@@ -105,9 +111,15 @@
         enemies.Clear()
         enemyLasers.Clear()
         powerUps.Clear()
+        powerUpTypes.Clear()
+        explosions.Clear()
+        explosionTimes.Clear()
+        nearMisses.Clear()
+        nearMissTimers.Clear()
         lives = 3
         playerInvulnerable = False
         invulnerabilityTimer = 0
+        shieldActive = False
         hasPowerUp = False
         powerUpTimer = 0
         powerUpType = -1
@@ -116,17 +128,50 @@
         enemiesForNextLevel = 10
         combo = 0
         comboTimer = 0
+        leftPressed = False
+        rightPressed = False
+        spacePressed = False
+        fireDelay = 0
+        isPaused = False
 
         ' Initialize ship in the center bottom of the screen
         ship = New Rectangle(Me.ClientSize.Width \ 2 - 20, Me.ClientSize.Height - 50, 40, 40)
+
+        ' Initialize star field
+        InitializeStarField()
 
         ' Set up game timer
         GameTimer.Interval = 16 ' Approximately 60 FPS
         GameTimer.Enabled = True
     End Sub
 
+    Private Sub InitializeStarField()
+        stars.Clear()
+        starSpeeds.Clear()
+        
+        For i As Integer = 0 To maxStars - 1
+            stars.Add(New Point(random.Next(Me.ClientSize.Width), random.Next(Me.ClientSize.Height)))
+            starSpeeds.Add(random.Next(1, 4)) ' Different speeds for parallax effect
+        Next
+    End Sub
+
+    Private Sub UpdateStarField()
+        For i As Integer = 0 To stars.Count - 1
+            Dim star As Point = stars(i)
+            star.Y += starSpeeds(i)
+            
+            ' Reset star to top if it goes off screen
+            If star.Y > Me.ClientSize.Height Then
+                star = New Point(random.Next(Me.ClientSize.Width), -5)
+            End If
+            
+            stars(i) = star
+        Next
+    End Sub
+
     Private Sub GameLoop() Handles GameTimer.Tick
         If Not isGameOver AndAlso Not isPaused Then
+            UpdateStarField()
             HandleInput()
             MoveGameObjects()
             CheckCollisions()
@@ -347,6 +392,7 @@
                             bullets.RemoveAt(i)
                             asteroids.RemoveAt(j)
                             AddScore(100)
+                            Console.Beep(800, 100) ' Sound effect for asteroid destruction
                             Exit For
                         End If
                     End If
@@ -370,6 +416,7 @@
                             enemies.RemoveAt(j)
                             AddScore(300)  ' More points for destroying enemies
                             enemiesDefeated += 1
+                            Console.Beep(600, 150) ' Sound effect for enemy destruction
                             Exit For
                         End If
                     End If
@@ -385,7 +432,7 @@
                     ship.Width - 10, ' Shrink width
                     ship.Height - 10) ' Shrink height
 
-                If shipHitbox.IntersectsWith(asteroid) AndAlso Not playerInvulnerable Then
+                If shipHitbox.IntersectsWith(asteroid) AndAlso Not playerInvulnerable AndAlso Not shieldActive Then
                     GameOver()
                     Exit For
                 End If
@@ -400,7 +447,7 @@
 
             ' Check ship-enemy collisions
             For Each enemy In enemies
-                If playerHitbox.IntersectsWith(enemy) AndAlso Not playerInvulnerable Then
+                If playerHitbox.IntersectsWith(enemy) AndAlso Not playerInvulnerable AndAlso Not shieldActive Then
                     GameOver()
                     Exit For
                 End If
@@ -408,7 +455,7 @@
 
             ' Check ship-enemy laser collisions
             For i As Integer = enemyLasers.Count - 1 To 0 Step -1
-                If enemyLasers(i).IntersectsWith(playerHitbox) AndAlso Not playerInvulnerable Then
+                If enemyLasers(i).IntersectsWith(playerHitbox) AndAlso Not playerInvulnerable AndAlso Not shieldActive Then
                     GameOver()
                     Exit For
                 End If
@@ -428,6 +475,7 @@
 
                     ' Debug line to verify collection
                     Debug.WriteLine($"Collected power-up type: {powerUpTypes(i)}")
+                    Console.Beep(1000, 200) ' Sound effect for power-up collection
 
                     ' Remove collected power-up
                     powerUps.RemoveAt(i)
@@ -458,7 +506,7 @@
         ' Power-up specific effects
         Select Case type
             Case POWERUP_SHIELD ' Shield
-                playerInvulnerable = True
+                shieldActive = True
 
             Case POWERUP_DOUBLESHOOT ' DoubleShot
                 ' Will be handled in HandleInput shooting logic
@@ -479,7 +527,7 @@
                 ' Handle power-up expiration
                 Select Case powerUpType
                     Case POWERUP_SHIELD ' Shield
-                        playerInvulnerable = False
+                        shieldActive = False
                     Case POWERUP_DOUBLESHOOT ' DoubleShot
                         ' No specific cleanup needed
                 End Select
@@ -581,6 +629,13 @@
             ' Draw using anti-aliasing
             e.Graphics.SmoothingMode = Drawing2D.SmoothingMode.AntiAlias
 
+            ' Draw star field background
+            For i As Integer = 0 To stars.Count - 1
+                Dim brightness As Integer = 100 + (starSpeeds(i) * 50) ' Faster stars are brighter
+                Dim starColor As Color = Color.FromArgb(brightness, brightness, brightness)
+                e.Graphics.FillRectangle(New SolidBrush(starColor), stars(i).X, stars(i).Y, 1, 1)
+            Next
+
             ' Draw game objects
             If Not isGameOver Then
                 ' Draw ship (replace existing ship drawing code)
@@ -592,7 +647,7 @@
                 e.Graphics.FillPolygon(shipBrush, points)
 
                 ' Draw shield if active
-                If hasPowerUp AndAlso powerUpType = POWERUP_SHIELD Then
+                If shieldActive Then
                     Dim shieldRect As New Rectangle(
                         ship.X - 5, ship.Y - 5,
                         ship.Width + 10, ship.Height + 10)
@@ -672,8 +727,26 @@
                 Next
 
                 ' Draw explosions
-                For Each explosion In explosions
-                    e.Graphics.FillEllipse(New SolidBrush(Color.Orange), explosion)
+                For i As Integer = 0 To explosions.Count - 1
+                    If i < explosionTimes.Count Then
+                        Dim timeLeft As Integer = explosionTimes(i)
+                        Dim maxTime As Integer = explosionMaxTime
+                        Dim progress As Single = 1.0F - (timeLeft / maxTime)
+                        
+                        ' Create expanding explosion effect
+                        Dim explosion As Rectangle = explosions(i)
+                        Dim expandedSize As Integer = CInt(explosion.Width * (1 + progress * 0.5))
+                        Dim expandedExplosion As New Rectangle(
+                            explosion.X - (expandedSize - explosion.Width) \ 2,
+                            explosion.Y - (expandedSize - explosion.Height) \ 2,
+                            expandedSize, expandedSize)
+                            
+                        ' Fade from orange to red
+                        Dim alpha As Integer = CInt(255 * (1 - progress))
+                        Dim explosionColor As Color = Color.FromArgb(alpha, 255, CInt(128 * (1 - progress)), 0)
+                        
+                        e.Graphics.FillEllipse(New SolidBrush(explosionColor), expandedExplosion)
+                    End If
                 Next
 
                 ' Draw near misses
@@ -693,15 +766,27 @@
             ' Draw level
             e.Graphics.DrawString($"Level: {level}", scoreFont, scoreBrush, 20, 50)
 
+            ' Draw combo (if active)
+            If combo > 1 Then
+                e.Graphics.DrawString($"Combo: x{combo}", scoreFont, New SolidBrush(Color.Yellow), 20, 80)
+                ' Draw combo timer bar
+                Dim comboBarWidth As Integer = 100
+                Dim comboBarHeight As Integer = 5
+                Dim comboProgress As Single = comboTimer / comboMaxTime
+                e.Graphics.FillRectangle(New SolidBrush(Color.DarkGray), 140, 90, comboBarWidth, comboBarHeight)
+                e.Graphics.FillRectangle(New SolidBrush(Color.Yellow), 140, 90, CInt(comboBarWidth * comboProgress), comboBarHeight)
+            End If
+
             ' Draw lives
             For i As Integer = 1 To lives
-                e.Graphics.FillEllipse(lifeIconBrush, 20 + (i * 30), 80, 20, 20)
+                e.Graphics.FillEllipse(lifeIconBrush, 20 + (i * 30), If(combo > 1, 110, 80), 20, 20)
             Next
 
             ' Draw active power-up indicator (add after drawing lives)
             If hasPowerUp AndAlso powerUpType >= 0 AndAlso powerUpType < powerUpBrushes.Length Then
                 ' Draw power-up icon
-                e.Graphics.FillEllipse(powerUpBrushes(powerUpType), 20, 110, 20, 20)
+                Dim powerUpY As Integer = If(combo > 1, 140, 110)
+                e.Graphics.FillEllipse(powerUpBrushes(powerUpType), 20, powerUpY, 20, 20)
 
                 ' Draw power-up timer bar
                 Dim barWidth As Integer = 100
@@ -709,9 +794,9 @@
                 Dim remainingWidth As Integer = CInt(barWidth * (powerUpTimer / 600.0))
 
                 ' Background bar
-                e.Graphics.FillRectangle(New SolidBrush(Color.DarkGray), 50, 115, barWidth, barHeight)
+                e.Graphics.FillRectangle(New SolidBrush(Color.DarkGray), 50, powerUpY + 5, barWidth, barHeight)
                 ' Remaining time bar
-                e.Graphics.FillRectangle(powerUpBrushes(powerUpType), 50, 115, remainingWidth, barHeight)
+                e.Graphics.FillRectangle(powerUpBrushes(powerUpType), 50, powerUpY + 5, remainingWidth, barHeight)
             End If
 
             ' Draw game over message
