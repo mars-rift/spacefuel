@@ -321,7 +321,7 @@
 
     Private Sub CreateAsteroids()
         Try
-            If random.Next(asteroidSpawnRate) = 0 Then
+            If random.Next(Math.Max(1, asteroidSpawnRate)) = 0 Then
                 Dim x As Integer = random.Next(0, Me.ClientSize.Width - 40)
                 asteroids.Add(New Rectangle(x, -50, 40, 40))
                 
@@ -340,7 +340,7 @@
     Private Sub ManageEnemies()
         Try
             ' Spawn new enemies - increased max count and improved spawn rate
-            If random.Next(enemySpawnRate) = 0 AndAlso enemies.Count < 5 Then ' Increased from 3 to 5
+            If random.Next(Math.Max(1, enemySpawnRate)) = 0 AndAlso enemies.Count < 5 Then ' Increased from 3 to 5
                 Dim x As Integer = random.Next(50, Me.ClientSize.Width - 90)
                 enemies.Add(New Rectangle(x, 50, 60, 60)) ' Increased size from 50x50 to 60x60
             End If
@@ -719,7 +719,9 @@
                 Dim brightness As Integer = 100 + (starSpeeds(i) * 50) ' Faster stars are brighter
                 Dim starSize As Integer = If(starSpeeds(i) > 2, 2, 1) ' Faster stars are bigger
                 Dim starColor As Color = Color.FromArgb(brightness, brightness, brightness)
-                e.Graphics.FillRectangle(New SolidBrush(starColor), stars(i).X, stars(i).Y, starSize, starSize)
+                Using starBrush As New SolidBrush(starColor)
+                    e.Graphics.FillRectangle(starBrush, stars(i).X, stars(i).Y, starSize, starSize)
+                End Using
             Next
 
             ' Draw game objects
@@ -741,7 +743,9 @@
                     Dim shieldRect As New Rectangle(
                         ship.X - 5, ship.Y - 5,
                         ship.Width + 10, ship.Height + 10)
-                    e.Graphics.DrawEllipse(New Pen(Color.Blue, 2), shieldRect)
+                    Using shieldPen As New Pen(Color.Blue, 2)
+                        e.Graphics.DrawEllipse(shieldPen, shieldRect)
+                    End Using
                 End If
 
                 ' Draw bullets
@@ -762,13 +766,17 @@
                         Dim craterSize As Integer = details(2).X ' Use pre-calculated size
                         Dim craterX As Integer = asteroid.X + details(0).X
                         Dim craterY As Integer = asteroid.Y + details(0).Y
-                        e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(30, 30, 30)), craterX, craterY, craterSize, craterSize)
+                        Using craterBrush As New SolidBrush(Color.FromArgb(30, 30, 30))
+                            e.Graphics.FillEllipse(craterBrush, craterX, craterY, craterSize, craterSize)
+                        End Using
 
                         ' Draw highlight using pre-calculated position
                         Dim highlightSize As Integer = details(2).Y ' Use pre-calculated size
                         Dim highlightX As Integer = asteroid.X + details(1).X
                         Dim highlightY As Integer = asteroid.Y + details(1).Y
-                        e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(80, 80, 80)), highlightX, highlightY, highlightSize, highlightSize)
+                        Using highlightBrush As New SolidBrush(Color.FromArgb(80, 80, 80))
+                            e.Graphics.FillEllipse(highlightBrush, highlightX, highlightY, highlightSize, highlightSize)
+                        End Using
                     End If
                 Next
 
@@ -812,13 +820,17 @@
                     Dim cockpitSize As Integer = enemy.Width \ 3 ' Increased back to 1/3 for visibility
                     Dim cockpitX As Integer = enemyCenterX - cockpitSize \ 2
                     Dim cockpitY As Integer = enemyCenterY - cockpitSize \ 2
-                    e.Graphics.FillEllipse(New SolidBrush(Color.DarkSlateGray), cockpitX, cockpitY, cockpitSize, cockpitSize)
+                    Using cockpitBrush As New SolidBrush(Color.DarkSlateGray)
+                        e.Graphics.FillEllipse(cockpitBrush, cockpitX, cockpitY, cockpitSize, cockpitSize)
+                    End Using
                     
                     ' Add engine glow effect for better visibility
                     Dim engineSize As Integer = 8
                     Dim engineX As Integer = enemyCenterX - directionX \ 2 - engineSize \ 2
                     Dim engineY As Integer = enemyCenterY - directionY \ 2 - engineSize \ 2
-                    e.Graphics.FillEllipse(New SolidBrush(Color.FromArgb(150, Color.Red)), engineX, engineY, engineSize, engineSize)
+                    Using engineBrush As New SolidBrush(Color.FromArgb(150, Color.Red))
+                        e.Graphics.FillEllipse(engineBrush, engineX, engineY, engineSize, engineSize)
+                    End Using
                 Next
 
                 ' Draw enemy lasers with enhanced visuals
@@ -827,7 +839,9 @@
                     e.Graphics.FillRectangle(enemyLaserBrush, laser)
                     ' Add glow effect
                     Dim glowRect As New Rectangle(laser.X - 1, laser.Y - 1, laser.Width + 2, laser.Height + 2)
-                    e.Graphics.FillRectangle(New SolidBrush(Color.FromArgb(100, Color.LimeGreen)), glowRect)
+                    Using glowBrush As New SolidBrush(Color.FromArgb(100, Color.LimeGreen))
+                        e.Graphics.FillRectangle(glowBrush, glowRect)
+                    End Using
                 Next
 
                 ' Draw power-ups (add after drawing enemy lasers)
@@ -859,19 +873,22 @@
                         ' Fade from orange to red
                         Dim alpha As Integer = CInt(255 * (1 - progress))
                         Dim explosionColor As Color = Color.FromArgb(alpha, 255, CInt(128 * (1 - progress)), 0)
-                        
-                        e.Graphics.FillEllipse(New SolidBrush(explosionColor), expandedExplosion)
+                        Using explosionBrush As New SolidBrush(explosionColor)
+                            e.Graphics.FillEllipse(explosionBrush, expandedExplosion)
+                        End Using
                     End If
                 Next
 
                 ' Draw near misses
                 For Each nearMiss In nearMisses
-                    e.Graphics.FillEllipse(New SolidBrush(Color.Green), nearMiss)
+                    Using nearMissBrush As New SolidBrush(Color.Green)
+                        e.Graphics.FillEllipse(nearMissBrush, nearMiss)
+                    End Using
                 Next
 
                 ' Draw near misses (visual feedback)
                 For Each nearMiss In nearMisses
-                    e.Graphics.DrawEllipse(New Pen(Color.White, 1), nearMiss)
+                    e.Graphics.DrawEllipse(Pens.White, nearMiss)
                 Next
             End If
 
@@ -883,7 +900,7 @@
 
             ' Draw combo (if active)
             If combo > 1 Then
-                e.Graphics.DrawString($"Combo: x{combo}", scoreFont, New SolidBrush(Color.Yellow), 20, 80)
+                e.Graphics.DrawString($"Combo: x{combo}", scoreFont, Brushes.Yellow, 20, 80)
                 ' Draw combo timer bar below the text
                 Dim comboBarWidth As Integer = 100
                 Dim comboBarHeight As Integer = 8
@@ -891,12 +908,12 @@
                 Dim barY As Integer = 105 ' Position below the combo text
                 
                 ' Background bar
-                e.Graphics.FillRectangle(New SolidBrush(Color.DarkGray), 20, barY, comboBarWidth, comboBarHeight)
+                e.Graphics.FillRectangle(Brushes.DarkGray, 20, barY, comboBarWidth, comboBarHeight)
                 ' Remaining time bar
-                e.Graphics.FillRectangle(New SolidBrush(Color.Yellow), 20, barY, CInt(comboBarWidth * comboProgress), comboBarHeight)
+                e.Graphics.FillRectangle(Brushes.Yellow, 20, barY, CInt(comboBarWidth * comboProgress), comboBarHeight)
                 
                 ' Add a border around the bar
-                e.Graphics.DrawRectangle(New Pen(Color.White, 1), 20, barY, comboBarWidth, comboBarHeight)
+                e.Graphics.DrawRectangle(Pens.White, 20, barY, comboBarWidth, comboBarHeight)
             End If
 
             ' Draw lives
@@ -916,7 +933,7 @@
                 Dim remainingWidth As Integer = CInt(barWidth * (powerUpTimer / 600.0))
 
                 ' Background bar
-                e.Graphics.FillRectangle(New SolidBrush(Color.DarkGray), 50, powerUpY + 5, barWidth, barHeight)
+                e.Graphics.FillRectangle(Brushes.DarkGray, 50, powerUpY + 5, barWidth, barHeight)
                 ' Remaining time bar
                 e.Graphics.FillRectangle(powerUpBrushes(powerUpType), 50, powerUpY + 5, remainingWidth, barHeight)
             End If

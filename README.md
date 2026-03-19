@@ -2,6 +2,10 @@
 
 A fast-paced space shooter game created in Visual Basic .NET with engaging power-ups, combo system, and progressive difficulty.
 
+## 🖼️ Screenshot
+
+![SpaceFuel Gameplay](screenshot.png)
+
 ## 🚀 Features
 
 - **Dynamic Gameplay**: Navigate through space, shoot asteroids and enemy ships
